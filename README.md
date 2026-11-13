@@ -16,15 +16,6 @@ Current state and check results: [status.md](status.md)
 
 The fresher the file, the more accurate the prediction. Download it again before each trip.
 
-## Setting it up in your own GitHub account
-
-1. Create a new public repository and upload all files of this project, including the `.github` folder.
-2. Open the **Actions** tab, enable workflows, select "Update A-GPS file" and click **Run workflow**.
-3. After about ten minutes the file is available under **Releases → current**. From then on the workflow runs
-   every day at 15:23 UTC.
-
-If a check fails, the run stops, the previous file stays online and GitHub sends an e-mail.
-
 ## How it works
 
 1. `agps/download.py` downloads precise orbits (rapid, ultra-rapid), Earth rotation parameters and broadcast
