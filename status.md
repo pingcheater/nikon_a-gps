@@ -1,6 +1,6 @@
 # Status der A-GPS-Datei
 
-- Erzeugt: 13.11.2026 20:14 UTC
+- Erzeugt: 13.11.2026 20:26 UTC
 - Gueltig: 13.11.2026 14:00 bis 11.12.2026 14:00 (GPS-Zeit)
 - Bahndaten bis: 13.11.2026 11:45
 - Satelliten (29): 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 23 24 25 26 27 28 29 31 32
