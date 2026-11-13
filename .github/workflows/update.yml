@@ -1,6 +1,6 @@
 yaml
 
-name: A-GPS-Datei aktualisieren
+name: A-GPS-Datei_aktualisieren
 
 on:
   schedule:
