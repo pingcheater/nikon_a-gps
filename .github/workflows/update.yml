@@ -1,8 +1,8 @@
-name: A-GPS-Datei_aktualisieren
+name: Update A-GPS file
 
 on:
   schedule:
-    - cron: "23 15 * * *"      # taeglich 15:23 UTC
+    - cron: "23 15 * * *"      # daily at 15:23 UTC
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  erzeugen:
+  generate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -23,17 +23,18 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Datei erzeugen und pruefen
+      - name: Generate and check the file
         run: python -m agps.generate --out out
-      - name: Veroeffentlichen
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view aktuell >/dev/null 2>&1 || gh release create aktuell --title "Aktuelle A-GPS-Datei" --notes "NML_28A.ee fuer Nikon D5300, COOLPIX P330/P510/P520. Wird taeglich automatisch ersetzt."
-          gh release upload aktuell out/NML_28A.ee --clobber
+          gh release view current >/dev/null 2>&1 || gh release create current --title "Current A-GPS file" --notes "NML_28A.ee for Nikon D5300 and COOLPIX P330/P510/P520. Replaced automatically every day."
+          gh release upload current out/NML_28A.ee --clobber
           cp out/status.md status.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add status.md
-          git commit -m "Status $(date -u +%F)" || echo "unveraendert"
+          git commit -m "Status $(date -u +%F)" || echo "unchanged"
+          git pull --rebase
           git push
