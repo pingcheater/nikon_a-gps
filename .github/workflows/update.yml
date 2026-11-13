@@ -1,10 +1,10 @@
 yaml
 
-name: A-GPS-File update
+name: A-GPS-Datei aktualisieren
 
 on:
   schedule:
-    - cron: "00 08 * * *"      # taeglich 15:23 UTC
+    - cron: "23 15 * * *"      # taeglich 15:23 UTC
   workflow_dispatch:
 
 permissions:
