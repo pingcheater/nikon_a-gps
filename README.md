@@ -31,8 +31,7 @@ Run locally: `pip install -r requirements.txt`, then `python -m agps.generate --
 ## Limitations
 
 - Accuracy decreases with the age of the file: a few metres on the first day; in a hindcast test 7 m (median)
-  after 9 days, up to 260 m for satellites passing through the Earth's shadow. No reference values exist yet for
-  weeks 3 and 4.
+  after 9 days, up to 260 m for satellites passing through the Earth's shadow.
 - The prediction cannot know about orbit manoeuvres after the file was generated.
 - PRN 1, 22 and 30 carry no orbit data, as in all original Nikon files (2015–2026).
 - The format was reverse engineered; tested with one D5300.
