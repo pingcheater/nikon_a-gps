@@ -47,6 +47,15 @@ Run locally: `pip install -r requirements.txt`, then `python -m agps.generate --
 Unofficial project with no affiliation to Nikon Corporation. Nikon, D5300 and COOLPIX are trademarks of their
 respective owners. The file format was reverse engineered. Use at your own risk; no guarantee of accuracy.
 
+## Acknowledgements
+
+Thanks to [prof-pguth](https://github.com/prof-pguth), [waziwoo](https://github.com/waziwoo)
+and [cowbutt](https://github.com/cowbutt) for collecting original Nikon A-GPS files in
+[git_microdem issue #5](https://github.com/prof-pguth/git_microdem/issues/5). Their archives
+made it possible to reverse engineer the file format.
+
 ## Licence
 
 MIT, see `LICENSE`.
+
+
