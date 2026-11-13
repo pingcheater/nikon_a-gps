@@ -1,4 +1,4 @@
-"""GPS-Bahnmodell: Kraeftemodell, Integration, Bahnanpassung an SP3-Positionen."""
+"""GPS orbit model: force model, numerical integration, orbit fit to SP3 positions."""
 import math, glob, os
 import numpy as np
 import erfa
@@ -15,7 +15,7 @@ R_SUN = 6.96e8
 NMAX = 8
 
 
-# ---------------------------------------------------------------- Zeit / EOP
+# ---------------------------------------------------------------- time / EOP
 def mjd_utc(t):
     return 44244.0 + (np.asarray(t, float) - LEAP) / 86400.0
 
@@ -31,7 +31,7 @@ class EOP:
         m = np.array(sorted(rows))
         v = np.array([rows[k] for k in m])
         self.mjd, self.xp, self.yp, self.dut, self.lod = m, v[:, 0], v[:, 1], v[:, 2], v[:, 3]
-        self.frozen_after = None  # fuer Rueckblick-Tests: EOP ab hier nur extrapoliert
+        self.frozen_after = None  # for hindcast tests: EOP after this date are extrapolated only
 
     def get(self, t):
         m = np.atleast_1d(mjd_utc(t))
@@ -48,7 +48,7 @@ class EOP:
 
 
 def c2t(t, eop):
-    """Matrizen GCRS -> ITRS fuer GPS-Zeiten t (Array)."""
+    """GCRS -> ITRS rotation matrices for GPS times t (array)."""
     t = np.atleast_1d(np.asarray(t, float))
     xp, yp, dut = eop.get(t)
     asec = math.pi / 180 / 3600
@@ -66,7 +66,7 @@ def sun_moon(t):
     return sun, moon
 
 
-# ---------------------------------------------------------------- Schwerefeld
+# ---------------------------------------------------------------- gravity field
 def load_gravity(path, nmax=NMAX):
     C = np.zeros((nmax + 2, nmax + 2)); S = np.zeros((nmax + 2, nmax + 2))
     for line in open(path):
@@ -80,7 +80,7 @@ def load_gravity(path, nmax=NMAX):
 
 
 def accel_harmonic(r, C, S, nmax=NMAX):
-    """Beschleunigung im erdfesten System (Cunningham-Rekursion), r: (N,3)."""
+    """Acceleration in the Earth-fixed frame (Cunningham recursion), r: (N,3)."""
     x, y, z = r[:, 0], r[:, 1], r[:, 2]
     r2 = x * x + y * y + z * z
     rho = RE * RE / r2
@@ -116,14 +116,14 @@ def accel_harmonic(r, C, S, nmax=NMAX):
     return (GM / (RE * RE)) * np.stack([ax, ay, az], axis=1)
 
 
-# ---------------------------------------------------------------- Kraefte
+# ---------------------------------------------------------------- forces
 class Force:
     def __init__(self, eop, gravfile):
         self.eop = eop
         self.C, self.S = load_gravity(gravfile)
 
     def accel(self, t, r, v, p):
-        """r, v: (N,3) im GCRS; p: (N,5) Strahlungsdruck-Parameter D0,Y0,B0,Bc,Bs."""
+        """r, v: (N,3) in GCRS; p: (N,5) solar radiation pressure parameters D0,Y0,B0,Bc,Bs."""
         M = c2t(t, self.eop)[0]
         a = accel_harmonic(r @ M.T, self.C, self.S) @ M
         sun, moon = sun_moon(t); sun = sun[0]; moon = moon[0]
@@ -134,14 +134,14 @@ class Force:
             dn = np.linalg.norm(d, axis=1, keepdims=True)
             sn = np.linalg.norm(body)
             a += gm * (d / dn ** 3 - body / sn ** 3)
-            # feste Erdgezeiten (k2)
+            # solid Earth tides (k2)
             sh = body / sn
             cth = rh @ sh
             a += (0.3 / 2) * (gm / sn ** 3) * (RE ** 5 / rn ** 4) * ((3 - 15 * cth[:, None] ** 2) * rh + 6 * cth[:, None] * sh)
-        # Relativitaet (Schwarzschild)
+        # relativity (Schwarzschild)
         v2 = np.sum(v * v, axis=1, keepdims=True); rv = np.sum(r * v, axis=1, keepdims=True)
         a += GM / (CLIGHT ** 2 * rn ** 3) * ((4 * GM / rn - v2) * r + 4 * rv * v)
-        # Strahlungsdruck (ECOM) mit Erdschatten
+        # solar radiation pressure (ECOM) with Earth shadow
         d = sun - r
         dn = np.linalg.norm(d, axis=1, keepdims=True)
         eD = d / dn
@@ -151,7 +151,7 @@ class Force:
         node = np.stack([-h[:, 1], h[:, 0], np.zeros(len(h))], axis=1)
         node /= np.linalg.norm(node, axis=1, keepdims=True)
         u = np.arctan2(np.sum(r * np.cross(h, node), axis=1), np.sum(r * node, axis=1))
-        # Schatten: Abstand von der Schattenachse, weicher Uebergang ueber die Halbschattenbreite
+        # shadow: distance from the shadow axis, smooth transition across the penumbra
         sh = sun / np.linalg.norm(sun)
         s_along = r @ sh
         perp = np.linalg.norm(r - s_along[:, None] * sh, axis=1)
@@ -162,7 +162,7 @@ class Force:
         return a
 
     def propagate(self, t0, y0, p, t_eval, rtol=1e-10):
-        """y0: (N,6), p: (N,5). Rueckgabe (len(t_eval), N, 6)."""
+        """y0: (N,6), p: (N,5). Returns (len(t_eval), N, 6)."""
         N = len(y0)
 
         def f(t, y):
@@ -207,7 +207,7 @@ def read_sp3(path):
 
 
 def load_truth(folder, include_ultra=True, ultra_observed_only=True):
-    """Alle SP3-Dateien zusammenfuehren: prn -> (t, xyz ECEF)."""
+    """Merge all SP3 files: prn -> (t, xyz ECEF)."""
     merged = {}
     files = sorted(glob.glob(os.path.join(folder, "*OPSRAP*ORB.SP3")))
     if include_ultra:
@@ -217,10 +217,10 @@ def load_truth(folder, include_ultra=True, ultra_observed_only=True):
         d = read_sp3(f)
         for prn, a in d.items():
             if ult and ultra_observed_only:
-                a = a[a[:, 0] < a[0, 0] + 86400]  # erste 24 h sind beobachtet
+                a = a[a[:, 0] < a[0, 0] + 86400]  # first 24 h are observed, the rest is predicted
             m = merged.setdefault(prn, {})
             for row in a:
-                m.setdefault(row[0], row[1:4])  # Rapid hat Vorrang (zuerst geladen)
+                m.setdefault(row[0], row[1:4])  # Rapid takes precedence (loaded first)
     out = {}
     for prn, m in merged.items():
         ts = np.array(sorted(m))
@@ -239,7 +239,7 @@ def gcrs_to_ecef(t, xyz, eop):
 
 
 def initial_state(ts, xi, t0):
-    """Startzustand aus inertialen Positionen: Polynom durch 11 Punkte um t0."""
+    """Initial state from inertial positions: polynomial through 11 points around t0."""
     i = int(np.argmin(np.abs(ts - t0)))
     lo = max(0, min(i - 5, len(ts) - 11))
     tt = ts[lo:lo + 11]; xx = xi[lo:lo + 11]
@@ -250,7 +250,7 @@ def initial_state(ts, xi, t0):
 
 
 def fit_orbits(force, truth, eop, prns, t_start, t_end, iters=4, verbose=True, step=900):
-    """Passt Startzustand + 5 Strahlungsdruck-Parameter je Satellit an. Rueckgabe: t0, y0 (N,6), p (N,5), rms (N)."""
+    """Fits initial state + 5 radiation pressure parameters per satellite. Returns t0, y0 (N,6), p (N,5), rms (N)."""
     t0 = t_start
     grid = np.arange(t_start, t_end + 1, step)
     obs = []; y0 = []
@@ -280,7 +280,7 @@ def fit_orbits(force, truth, eop, prns, t_start, t_end, iters=4, verbose=True, s
         rms = np.sqrt(np.nanmean((res ** 2).sum(axis=2), axis=1))
         res = np.nan_to_num(res)
         if verbose:
-            print("  Iteration %d: Anpassungsfehler Median %.3f m, Max %.3f m" % (it, np.median(rms), rms.max()), flush=True)
+            print("  iteration %d: fit error median %.3f m, max %.3f m" % (it, np.median(rms), rms.max()), flush=True)
         if it == iters - 1:
             break
         for n in range(N):

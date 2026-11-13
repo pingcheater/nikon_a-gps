@@ -1,6 +1,6 @@
-"""Erzeugt NML_28A.ee (Nikon A-GPS) aus IGS-Daten.
+"""Generates NML_28A.ee (Nikon A-GPS) from IGS data.
 
-Aufruf:  python -m agps.generate --out out [--data DATENORDNER] [--no-download] [--now 2026-11-13T15:30]
+Usage:  python -m agps.generate --out out [--data DATA_FOLDER] [--no-download] [--now 2026-11-13T15:30]
 """
 import argparse, datetime, glob, math, os, sys, time
 from multiprocessing import Pool
@@ -9,13 +9,13 @@ from scipy.optimize import least_squares
 from . import orbit, brdc, download, nml28a as N
 
 MU = N.MU; OE = N.OMEGA_E; TWO = 2 * math.pi
-EXCLUDE = (1, 22, 30)   # fehlen in allen Nikon-Originalen 2015-2026
+EXCLUDE = (1, 22, 30)   # missing in all original Nikon files 2015-2026
 DAY = 86400.0
 HERE = os.path.dirname(os.path.abspath(__file__))
 GRAV = os.path.join(HERE, "..", "data", "JGM3.gfc")
 
 
-# ------------------------------------------------------------ Ephemeriden-Fit
+# ------------------------------------------------------------ ephemeris fit
 def model(x, toe, t):
     sqrtA, e, i0, Om, w, M0, dn, Omd, idot, cuc, cus, crc, crs, cic, cis = x
     A = sqrtA * sqrtA; n = math.sqrt(MU / A ** 3) + dn; tk = t - toe
@@ -65,7 +65,7 @@ def fit_sat(args):
         y[5] += n * dt; y[3] += (x[7] - OE) * dt; y[2] += x[8] * dt
         return y
     med = np.median(rmsl); lim = max(4.0, 3 * med)
-    for _ in range(3):   # schlechte Fenster mit Startwerten aus den Nachbarn wiederholen
+    for _ in range(3):   # retry poor windows with start values taken from their neighbours
         bad = [k for k in range(112) if rmsl[k] > lim]
         if not bad: break
         for k in bad:
@@ -80,7 +80,7 @@ def fit_sat(args):
     return prn, np.array(out), np.array(rmsl)
 
 
-# ------------------------------------------------------------ Kodierung
+# ------------------------------------------------------------ encoding
 def encode_robust(ints, width):
     k = np.arange(28.); y = np.array(ints, float); note = ""
     A = np.stack([np.ones(28), k, k * k, k ** 3 / 256], 1)
@@ -95,7 +95,7 @@ def encode_robust(ints, width):
     lim = (1 << (width - 1)) - 1
     raw = [int(round(ints[j] - (h[0] + h[1] * j + h[2] * j * j + h[3] * j ** 3 / 256))) for j in range(28)]
     s = [max(-lim, min(lim, v)) for v in raw]
-    if s != raw: note += " Residuum"
+    if s != raw: note += " residual"
     return dict(h=h, z=0, s=s), note.strip()
 
 
@@ -130,14 +130,14 @@ def build_blocks(T0, eph, latest, log):
             for name, (pname, width, lsb, _) in zip(ORDER, N.PARAMS):
                 vals = raan if name == "raan" else X[:, COL[name]]
                 sec, note = encode_robust([int(round(v / lsb)) for v in vals], width)
-                if note: log.append("Block %d PRN %d %s: %s begrenzt" % (b + 1, prn, name, note))
+                if note: log.append("block %d PRN %d %s: %s clipped" % (b + 1, prn, name, note))
                 secs.append(sec)
             slots.append(dict(prn=prn, status=0, af0=af0, af1=af1, reserved=0, sections=secs))
         blocks.append(dict(t=Tb, index=b, count=4, slots=slots))
     return blocks
 
 
-# ------------------------------------------------------------ Ablauf
+# ------------------------------------------------------------ main flow
 def read_leap(path):
     for line in open(path):
         if "LEAP SECONDS" in line: return int(line.split()[0])
@@ -147,15 +147,15 @@ def read_leap(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="out"); ap.add_argument("--data", default="igs-daten")
+    ap.add_argument("--out", default="out"); ap.add_argument("--data", default="igs-data")
     ap.add_argument("--no-download", action="store_true"); ap.add_argument("--now", default=None)
     a = ap.parse_args()
     now = datetime.datetime.fromisoformat(a.now) if a.now else datetime.datetime.utcnow()
     os.makedirs(a.out, exist_ok=True)
     if not a.no_download:
-        print("Lade IGS-Daten ...", flush=True); download.download_all(a.data, now)
+        print("Downloading IGS data ...", flush=True); download.download_all(a.data, now)
 
-    # Broadcast-Daten: Uhren, Gesundheit, Schaltsekunden
+    # broadcast data: clocks, health, leap seconds
     bfiles = sorted(glob.glob(os.path.join(a.data, "BRDC*MN.rnx")), key=lambda p: os.path.basename(p).split("_")[2])
     leap = next((l for l in (read_leap(f) for f in reversed(bfiles)) if l), None)
     if leap: orbit.LEAP = leap
@@ -164,14 +164,14 @@ def main():
     latest = {}
     for r in allb:
         if r["prn"] not in latest or r["toc"] > latest[r["prn"]]["toc"]: latest[r["prn"]] = r
-    if len(latest) < 24: sys.exit("FEHLER: nur %d Satelliten in den Broadcast-Daten" % len(latest))
+    if len(latest) < 24: sys.exit("ERROR: only %d satellites in the broadcast data" % len(latest))
 
     eop = orbit.EOP(a.data); truth = orbit.load_truth(a.data); force = orbit.Force(eop, GRAV)
     truth = {p: (t[t <= now_gps], x[t <= now_gps]) for p, (t, x) in truth.items()}
     t_last = max(v[0][-1] for v in truth.values())
-    print("Bahndaten bis %s, %d Satelliten" % (N.gps_datetime(t_last).strftime("%d.%m.%Y %H:%M"), len(truth)), flush=True)
+    print("orbit data until %s, %d satellites" % (N.gps_datetime(t_last).strftime("%Y-%m-%d %H:%M"), len(truth)), flush=True)
 
-    # Bahnanpassung mit gestaffelten Bogenlaengen (Manoever verkuerzen den Bogen)
+    # orbit fit with staggered arc lengths (manoeuvres shorten the arc)
     res = {}; todo = sorted(truth); notes = []
     for days, lim in ((5.0, 3.0), (2.5, 10.0), (1.0, 30.0)):
         t_s = t_last - days * DAY
@@ -182,14 +182,14 @@ def main():
         if not ok: continue
         tic = time.time()
         t0, y0, p_, rms = orbit.fit_orbits(force, truth, eop, ok, t_s, t_last, verbose=False, iters=5)
-        print("Anpassung ueber %.1f Tage: %d Satelliten, %.0f s" % (days, len(ok), time.time() - tic), flush=True)
+        print("fit over %.1f days: %d satellites, %.0f s" % (days, len(ok), time.time() - tic), flush=True)
         for n, p in enumerate(ok):
             if rms[n] <= lim: res[p] = dict(t0=t0, y0=y0[n], p=p_[n], rms=float(rms[n]), arc=days)
-            else: notes.append("PRN %d: %.1f m Restfehler ueber %.1f Tage" % (p, rms[n], days))
+            else: notes.append("PRN %d: %.1f m residual error over %.1f days" % (p, rms[n], days))
         todo = [p for p in todo if p not in res]
-    if todo: notes.append("ohne Bahn: PRN " + ", ".join(map(str, todo)))
+    if todo: notes.append("no orbit: PRN " + ", ".join(map(str, todo)))
 
-    # Dateibeginn: letztes 14:00 GPS-Zeit vor jetzt (wie bei den Nikon-Originalen)
+    # file start: last 14:00 GPS time before now (as in the original Nikon files)
     T0 = math.floor((now_gps - 14 * 3600) / DAY) * DAY + 14 * 3600
     grid = T0 + 900.0 * np.arange(112 * 24 + 1)
     ecef = {}
@@ -198,20 +198,20 @@ def main():
         ps = [p for p in sorted(res) if res[p]["t0"] == t0]
         traj = force.propagate(t0, np.array([res[p]["y0"] for p in ps]), np.array([res[p]["p"] for p in ps]), grid)
         for n, p in enumerate(ps): ecef[p] = orbit.gcrs_to_ecef(grid, traj[:, n, :3], eop)
-    print("Vorhersage 28 Tage: %.0f s" % (time.time() - tic), flush=True)
+    print("28-day prediction: %.0f s" % (time.time() - tic), flush=True)
     tic = time.time()
     with Pool() as pool: R = pool.map(fit_sat, [(p, grid, ecef[p], T0) for p in sorted(ecef)])
     eph = {}
     for p, x, r in R:
         if r.max() < 30: eph[p] = x
-        else: notes.append("PRN %d: Ephemeriden-Fit %.0f m, ausgelassen" % (p, r.max()))
-    print("Ephemeriden-Fit: %.0f s" % (time.time() - tic), flush=True)
+        else: notes.append("PRN %d: ephemeris fit %.0f m, skipped" % (p, r.max()))
+    print("ephemeris fit: %.0f s" % (time.time() - tic), flush=True)
 
     blocks = build_blocks(T0, eph, latest, notes)
     target = os.path.join(a.out, "NML_28A.ee")
     N.write_file(target, blocks)
 
-    # ---------------- Kontrolle: Datei dekodieren und vergleichen
+    # ---------------- checks: decode the file and compare
     B = N.read_file(target)
     E = {}
     for b in B:
@@ -232,24 +232,24 @@ def main():
                     ult.append(np.linalg.norm(np.array(N.ecef(E[prn][int((row[0] - T0) // 21600)], row[0])) - row[1:4]))
     nsat = len(E)
     med = lambda v: float(np.median(v)) if len(v) else float("nan")
-    checks = [("CRC aller Bloecke", all(b["crc_ok"] for b in B)),
-              ("mindestens 24 Satelliten (%d)" % nsat, nsat >= 24),
-              ("Datei gegen eigene Vorhersage (Median %.1f m, Max %.1f m)" % (med(own), max(own)), max(own) < 50),
-              ("Datei gegen IGS-Prognose (Median %.1f m, %d Vergleiche)" % (med(ult), len(ult)), len(ult) == 0 or med(ult) < 25),
-              ("Datei gegen Broadcast-Ephemeriden (Median %.1f m, %d Vergleiche)" % (med(bro), len(bro)), len(bro) == 0 or med(bro) < 25)]
+    checks = [("CRC of all blocks", all(b["crc_ok"] for b in B)),
+              ("at least 24 satellites (%d)" % nsat, nsat >= 24),
+              ("file vs. own prediction (median %.1f m, max %.1f m)" % (med(own), max(own)), max(own) < 50),
+              ("file vs. IGS prediction (median %.1f m, %d comparisons)" % (med(ult), len(ult)), len(ult) == 0 or med(ult) < 25),
+              ("file vs. broadcast ephemerides (median %.1f m, %d comparisons)" % (med(bro), len(bro)), len(bro) == 0 or med(bro) < 25)]
     ok = all(c[1] for c in checks)
     end = N.gps_datetime(T0 + 28 * DAY)
-    lines = ["# Status der A-GPS-Datei", "",
-             "- Erzeugt: %s UTC" % now.strftime("%d.%m.%Y %H:%M"),
-             "- Gueltig: %s bis %s (GPS-Zeit)" % (N.gps_datetime(T0).strftime("%d.%m.%Y %H:%M"), end.strftime("%d.%m.%Y %H:%M")),
-             "- Bahndaten bis: %s" % N.gps_datetime(t_last).strftime("%d.%m.%Y %H:%M"),
-             "- Satelliten (%d): %s" % (nsat, " ".join(str(p) for p in sorted(E))), "", "## Kontrollen", ""]
-    lines += ["- %s %s" % ("OK    " if c[1] else "FEHLER", c[0]) for c in checks]
-    if notes: lines += ["", "## Hinweise", ""] + ["- " + n for n in notes]
+    lines = ["# A-GPS file status", "",
+             "- Generated: %s UTC" % now.strftime("%Y-%m-%d %H:%M"),
+             "- Valid: %s to %s (GPS time)" % (N.gps_datetime(T0).strftime("%Y-%m-%d %H:%M"), end.strftime("%Y-%m-%d %H:%M")),
+             "- Orbit data until: %s" % N.gps_datetime(t_last).strftime("%Y-%m-%d %H:%M"),
+             "- Satellites (%d): %s" % (nsat, " ".join(str(p) for p in sorted(E))), "", "## Checks", ""]
+    lines += ["- %s %s" % ("OK   " if c[1] else "FAIL", c[0]) for c in checks]
+    if notes: lines += ["", "## Notes", ""] + ["- " + n for n in notes]
     open(os.path.join(a.out, "status.md"), "w").write("\n".join(lines) + "\n")
     print("\n".join(lines))
     if not ok:
-        os.remove(target); sys.exit("FEHLER: Kontrolle nicht bestanden, Datei verworfen")
+        os.remove(target); sys.exit("ERROR: checks failed, file discarded")
 
 
 if __name__ == "__main__":

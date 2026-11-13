@@ -1,4 +1,4 @@
-"""Laedt die benoetigten IGS-Daten vom BKG (igs.bkg.bund.de)."""
+"""Downloads the required IGS data from BKG (igs.bkg.bund.de)."""
 import datetime, gzip, os, re, urllib.request
 
 BASE = "https://igs.bkg.bund.de/root_ftp/IGS"
@@ -14,7 +14,7 @@ def _get(url, tries=3):
                 return r.read()
         except Exception as e:  # noqa
             last = e
-    raise RuntimeError("Abruf fehlgeschlagen: %s (%s)" % (url, last))
+    raise RuntimeError("download failed: %s (%s)" % (url, last))
 
 
 def listing(url):
@@ -34,12 +34,12 @@ def fetch(url, name, folder):
         raw = gzip.decompress(raw)
     with open(target, "wb") as f:
         f.write(raw)
-    print("  geladen", name, flush=True)
+    print("  downloaded", name, flush=True)
     return target
 
 
 def download_all(folder, now=None, days=8):
-    """Tagesbahnen der letzten `days` Tage, die drei neuesten Ultra-Rapid-Bahnen, Broadcast-Daten von heute und gestern."""
+    """Rapid orbits of the last `days` days, the three newest ultra-rapid orbits, broadcast data of today and yesterday."""
     os.makedirs(folder, exist_ok=True)
     now = now or datetime.datetime.utcnow()
     week = (now - GPS_EPOCH).days // 7
@@ -72,6 +72,6 @@ def download_all(folder, now=None, days=8):
         if got >= 2:
             break
     if not ult:
-        raise RuntimeError("keine Ultra-Rapid-Bahnen gefunden")
+        raise RuntimeError("no ultra-rapid orbits found")
     if not got:
-        raise RuntimeError("keine Broadcast-Daten gefunden")
+        raise RuntimeError("no broadcast data found")

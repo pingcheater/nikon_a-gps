@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-nml28a.py - Leser und Schreiber fuer Nikon A-GPS-Dateien "NML_28A.ee"
+nml28a.py - reader and writer for Nikon A-GPS files "NML_28A.ee"
 (D5300, COOLPIX P330/P510/P520).
 
-Format (per Reverse Engineering ermittelt, Stand 13.11.2026):
+Format (reverse engineered, as of 2026-11-13):
 
-Datei   = 4 Wochenbloecke zu je 32.680 Bytes (alles Big Endian)
-Block   = Header (6 Bytes) + 32 Slots (je 1.021 Bytes) + CRC (2 Bytes)
-Header  = Startzeit in GPS-Sekunden seit 06.01.1980 (uint32),
-          Blocknummer 0..3 (uint8), Blockanzahl 4 (uint8)
-CRC     = CRC-16/XMODEM (Polynom 0x1021, Startwert 0) ueber Header + Slots
-Slot    = PRN (uint8), Status (uint8: 0x00 = Bahn vorhanden, 0xff = keine Bahn),
-          af0 (int32, 2^-40 s, bezogen auf Blockstart),
-          af1 (int24, 2^-50 s/s), 24 Null-Bits,
-          danach 15 Sektionen (bitgepackt), je eine pro Ephemeridenparameter.
-Sektion = h0 (34 Bit), h1 (34 Bit), h2 (24 Bit), h3 (20 Bit), z (8 Bit),
-          28 Residuen s[k] (je 12, 16 oder 24 Bit, vorzeichenbehaftet)
-          Wert(k) = h0 + h1*k + h2*k^2 + h3*k^3/256 + s[k],  k = 0..27
+file    = 4 weekly blocks of 32,680 bytes each (all big endian)
+block   = header (6 bytes) + 32 slots (1,021 bytes each) + CRC (2 bytes)
+header  = start time in GPS seconds since 1980-01-06 (uint32),
+          block index 0..3 (uint8), block count 4 (uint8)
+CRC     = CRC-16/XMODEM (polynomial 0x1021, init 0) over header + slots
+slot    = PRN (uint8), status (uint8: 0x00 = orbit present, 0xff = no orbit),
+          af0 (int32, 2^-40 s, referenced to block start),
+          af1 (int24, 2^-50 s/s), 24 zero bits,
+          followed by 15 sections (bit-packed), one per ephemeris parameter.
+section = h0 (34 bits), h1 (34 bits), h2 (24 bits), h3 (20 bits), z (8 bits),
+          28 residuals s[k] (12, 16 or 24 bits each, signed)
+          value(k) = h0 + h1*k + h2*k^2 + h3*k^3/256 + s[k],  k = 0..27
 
-Jeder Block enthaelt damit pro Satellit 28 Ephemeridensaetze im Stil der
-GPS-Broadcast-Ephemeriden, einen je 6 Stunden. Die Bezugszeit (toe) von Satz k
-liegt in der Mitte seines Intervalls: toe = Blockstart + 6h*k + 3h.
+Each block therefore holds 28 ephemeris sets per satellite in the style of the
+GPS broadcast ephemeris, one per 6 hours. The reference time (toe) of set k
+lies in the middle of its interval: toe = block start + 6h*k + 3h.
 
-Reihenfolge, Bitbreite der Residuen und Einheit (LSB) der 15 Parameter:
+Order, residual bit width and unit (LSB) of the 15 parameters:
 """
 import sys, math, struct, csv, datetime
 
@@ -30,19 +30,19 @@ BLOCK = 32680
 SLOT = 1021
 NSEC = 15
 NSAMP = 28
-STEP = 21600           # 6 Stunden
-TOE_OFFSET = 10800     # toe in Intervallmitte
-PI = 3.1415926535898   # Wert aus der GPS-Schnittstellenspezifikation
+STEP = 21600           # 6 hours
+TOE_OFFSET = 10800     # toe in the middle of the interval
+PI = 3.1415926535898   # value from the GPS interface specification
 OMEGA_E = 7.2921151467e-5
 MU = 3.986005e14
 GPS_EPOCH = datetime.datetime(1980, 1, 6, tzinfo=datetime.timezone.utc)
 
-# (Name, Residuenbreite in Bit, LSB, Einheit nach Skalierung)
+# (name, residual width in bits, LSB, unit after scaling)
 PARAMS = [
     ("sqrtA", 16, 2.0 ** -19, "sqrt(m)"),
     ("e",     16, 2.0 ** -33, "-"),
     ("i0",    16, 2.0 ** -31 * PI, "rad"),
-    ("raan",  16, 2.0 ** -31 * PI, "rad"),   # inertiale Rektaszension, siehe omega0()
+    ("raan",  16, 2.0 ** -31 * PI, "rad"),   # inertial right ascension of the node, see ephemerides()
     ("M0",    24, 2.0 ** -31 * PI, "rad"),
     ("omega", 24, 2.0 ** -31 * PI, "rad"),
     ("idot",  12, 2.0 ** -43 * PI, "rad/s"),
@@ -73,7 +73,7 @@ def gps_datetime(t):
 
 
 def gmst(gps_seconds):
-    """GMST (IAU 1982) in rad; die Datei setzt GPS-Zeit ohne Schaltsekunden als UT ein."""
+    """GMST (IAU 1982) in rad; the file uses GPS time without leap seconds as UT."""
     jd = 2444244.5 + gps_seconds / 86400.0
     T = (jd - 2451545.0) / 36525.0
     g = 67310.54841 + (876600 * 3600 + 8640184.812866) * T + 0.093104 * T * T - 6.2e-6 * T ** 3
@@ -115,7 +115,7 @@ def pack_slot(r):
         nonlocal x, n
         lo, hi = -(1 << (k - 1)), (1 << k) - 1
         if not lo <= v <= hi:
-            raise ValueError("Wert %d passt nicht in %d Bit" % (v, k))
+            raise ValueError("value %d does not fit into %d bits" % (v, k))
         x = (x << k) | (v & ((1 << k) - 1))
         n += k
 
@@ -133,7 +133,7 @@ def pack_slot(r):
 def read_file(path):
     data = open(path, "rb").read()
     if len(data) % BLOCK:
-        raise ValueError("unerwartete Dateigroesse %d" % len(data))
+        raise ValueError("unexpected file size %d" % len(data))
     blocks = []
     for i in range(len(data) // BLOCK):
         blk = data[i * BLOCK:(i + 1) * BLOCK]
@@ -154,13 +154,13 @@ def write_file(path, blocks):
 
 
 def section_values(sec):
-    """Ganzzahlige Rohwerte der 28 Stuetzstellen (in LSB)."""
+    """Integer raw values of the 28 samples (in LSB)."""
     h0, h1, h2, h3 = sec["h"]
     return [h0 + h1 * k + h2 * k * k + h3 * k ** 3 / 256.0 + sec["s"][k] for k in range(NSAMP)]
 
 
 def ephemerides(block, slot):
-    """28 Ephemeridensaetze eines Satelliten in SI-Einheiten (GPS-ICD-Konvention)."""
+    """28 ephemeris sets of one satellite in SI units (GPS ICD convention)."""
     if slot["status"] != 0:
         return []
     cols = [section_values(sec) for sec in slot["sections"]]
@@ -171,7 +171,7 @@ def ephemerides(block, slot):
         ep = dict(prn=slot["prn"], toe=toe, week=toe // 604800, tow=toe % 604800)
         for (name, _, lsb, _), col in zip(PARAMS, cols):
             ep[name] = col[k] * lsb
-        # Datei speichert die inertiale Rektaszension; Omega0 nach ICD = raan - GMST(Wochenbeginn)
+        # the file stores the inertial right ascension; Omega0 per ICD = raan - GMST(start of week)
         ep["omega0"] = (ep["raan"] - gmst(week_start) + math.pi) % (2 * math.pi) - math.pi
         ep["M0"] = (ep["M0"] + math.pi) % (2 * math.pi) - math.pi
         ep["omega"] = (ep["omega"] + math.pi) % (2 * math.pi) - math.pi
@@ -182,7 +182,7 @@ def ephemerides(block, slot):
 
 
 def ecef(ep, t):
-    """Satellitenposition (ECEF, m) zur GPS-Zeit t nach dem Standardalgorithmus der GPS-ICD."""
+    """Satellite position (ECEF, m) at GPS time t using the standard GPS ICD algorithm."""
     A = ep["sqrtA"] ** 2
     n = math.sqrt(MU / A ** 3) + ep["deltan"]
     tk = t - ep["toe"]
@@ -204,7 +204,7 @@ def ecef(ep, t):
 
 
 def encode_section(values, width):
-    """Ganzzahlige Rohwerte (28 Stueck, in LSB) -> Sektion mit kubischem Fit und Residuen."""
+    """Integer raw values (28, in LSB) -> section with cubic fit and residuals."""
     import numpy as np
     k = np.arange(NSAMP, dtype=float)
     A = np.stack([np.ones(NSAMP), k, k * k, k ** 3 / 256.0], axis=1)
@@ -214,7 +214,7 @@ def encode_section(values, width):
          for j in range(NSAMP)]
     lim = 1 << (width - 1)
     if max(abs(x) for x in s) >= lim:
-        raise ValueError("Residuum uebersteigt %d Bit" % width)
+        raise ValueError("residual exceeds %d bits" % width)
     return dict(h=h, z=0, s=s)
 
 
@@ -222,11 +222,11 @@ def info(path):
     blocks = read_file(path)
     for b in blocks:
         prns = [s["prn"] for s in b["slots"] if s["status"] == 0 and s["prn"]]
-        print("Block %d/%d  Start %s (GPS-Zeit)  CRC %s  %d Satelliten: %s" % (
-            b["index"] + 1, b["count"], gps_datetime(b["t"]).strftime("%d.%m.%Y %H:%M"),
-            "ok" if b["crc_ok"] else "FEHLER", len(prns), " ".join(map(str, prns))))
+        print("Block %d/%d  start %s (GPS time)  CRC %s  %d satellites: %s" % (
+            b["index"] + 1, b["count"], gps_datetime(b["t"]).strftime("%Y-%m-%d %H:%M"),
+            "ok" if b["crc_ok"] else "ERROR", len(prns), " ".join(map(str, prns))))
     end = blocks[-1]["t"] + 604800
-    print("Gueltig bis %s" % gps_datetime(end).strftime("%d.%m.%Y %H:%M"))
+    print("Valid until %s (GPS time)" % gps_datetime(end).strftime("%Y-%m-%d %H:%M"))
 
 
 def export_csv(path, out):
@@ -241,18 +241,18 @@ def export_csv(path, out):
                 for ep in ephemerides(b, s):
                     ep["toe_gps"] = gps_datetime(ep["toe"]).strftime("%Y-%m-%d %H:%M:%S")
                     w.writerow([ep[n] if not isinstance(ep[n], float) else repr(ep[n]) for n in names])
-    print("geschrieben:", out)
+    print("written:", out)
 
 
 def selftest(path):
-    """Datei lesen, neu schreiben und Byte fuer Byte vergleichen."""
+    """Read the file, write it again and compare byte by byte."""
     import tempfile, os
     blocks = read_file(path)
     tmp = tempfile.mktemp()
     write_file(tmp, blocks)
     same = open(tmp, "rb").read() == open(path, "rb").read()
     os.remove(tmp)
-    print("Roundtrip byte-identisch:", same)
+    print("Round trip byte-identical:", same)
     return same
 
 
@@ -264,4 +264,4 @@ if __name__ == "__main__":
     elif len(sys.argv) >= 3 and sys.argv[1] == "selftest":
         sys.exit(0 if selftest(sys.argv[2]) else 1)
     else:
-        print("Aufruf: nml28a.py info DATEI | csv DATEI AUSGABE.csv | selftest DATEI")
+        print("Usage: nml28a.py info FILE | csv FILE OUTPUT.csv | selftest FILE")
