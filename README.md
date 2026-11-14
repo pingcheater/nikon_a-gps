@@ -4,7 +4,7 @@ Nikon no longer provides the A-GPS file `NML_28A.ee` (since 2026). This project 
 freely available orbit data of the International GNSS Service (IGS) and publishes it at a fixed address.
 The file works with the D5300 and the COOLPIX P330, P510 and P520.
 
-**Download:** ['https://github.com/pingcheater/nikon_a-gps/releases/download/current/NML_28A.ee'](https://github.com/pingcheater/nikon_a-gps/releases/download/current/NML_28A.ee)
+**Download:** [https://github.com/pingcheater/nikon_a-gps/releases/download/current/NML_28A.ee](https://github.com/pingcheater/nikon_a-gps/releases/download/current/NML_28A.ee)
 
 Current state and check results: [status.md](status.md)
 
