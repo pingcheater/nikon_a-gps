@@ -2,7 +2,7 @@ name: Update A-GPS file
 
 on:
   schedule:
-    - cron: "23 15 * * *"      # daily at 15:23 UTC
+    - cron: "00 00 * * *"      # daily at 00:00 UTC
   workflow_dispatch:
 
 permissions:
