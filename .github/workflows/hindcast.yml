@@ -1,0 +1,90 @@
+name: Hindcast
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_start:
+        description: "First start date (YYYY-MM-DD, at least 29 days ago)"
+        default: "2026-08-31"
+      count:
+        description: "Number of start dates"
+        default: "8"
+      step_days:
+        description: "Days between start dates"
+        default: "7"
+      label:
+        description: "Name of this test run (folder under hindcast/)"
+        default: "baseline"
+
+concurrency:
+  group: hindcast
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      starts: ${{ steps.p.outputs.starts }}
+    steps:
+      - id: p
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import datetime, json
+          d = datetime.date.fromisoformat("${{ inputs.first_start }}")
+          n = int("${{ inputs.count }}"); s = int("${{ inputs.step_days }}")
+          latest = datetime.date.today() - datetime.timedelta(days=30)
+          starts = [str(d + datetime.timedelta(days=s * i)) for i in range(n) if d + datetime.timedelta(days=s * i) <= latest]
+          print("starts=" + json.dumps(starts))
+          PY
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        start: ${{ fromJSON(needs.plan.outputs.starts) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Hindcast ${{ matrix.start }}
+        run: python -m agps.hindcast run --start ${{ matrix.start }} --out hc --label ${{ inputs.label }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hc-${{ matrix.start }}
+          path: |
+            hc/*.csv
+            hc/*.txt
+
+  summary:
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hc-*
+          path: results
+      - name: Summarise
+        run: python -m agps.hindcast summary --inp results --out hindcast/${{ inputs.label }} --label ${{ inputs.label }}
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add hindcast
+          git commit -m "Hindcast ${{ inputs.label }}" || echo "unchanged"
+          git pull --rebase
+          git push
