@@ -183,6 +183,8 @@ def build(data, out, now, freeze_eop=False, keep_on_fail=False):
             else: notes.append("PRN %d: %.1f m residual error over %.1f days" % (p, rms[n], days))
         todo = [p for p in todo if p not in res]
     if todo: notes.append("no orbit: PRN " + ", ".join(map(str, todo)))
+    if len(res) < 24:
+        raise RuntimeError("only %d satellites could be fitted (data gap in the orbit files?)" % len(res))
 
     # file start: last 14:00 GPS time before now (as in the original Nikon files)
     T0 = math.floor((now_gps - 14 * 3600) / DAY) * DAY + 14 * 3600
@@ -229,7 +231,7 @@ def build(data, out, now, freeze_eop=False, keep_on_fail=False):
     med = lambda v: float(np.median(v)) if len(v) else float("nan")
     checks = [("CRC of all blocks", all(b["crc_ok"] for b in B)),
               ("at least 24 satellites (%d)" % nsat, nsat >= 24),
-              ("file vs. own prediction (median %.1f m, max %.1f m)" % (med(own), max(own)), max(own) < 50),
+              ("file vs. own prediction (median %.1f m, max %.1f m)" % (med(own), max(own, default=float("nan"))), len(own) > 0 and max(own) < 50),
               ("file vs. IGS prediction (median %.1f m, %d comparisons)" % (med(ult), len(ult)), len(ult) == 0 or med(ult) < 25),
               ("file vs. broadcast ephemerides (median %.1f m, %d comparisons)" % (med(bro), len(bro)), len(bro) == 0 or med(bro) < 25)]
     ok = all(c[1] for c in checks)

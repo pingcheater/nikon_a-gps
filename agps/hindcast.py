@@ -96,7 +96,13 @@ def run(a):
                                           [start - datetime.timedelta(days=1), start])
         if missing: print("missing:", ", ".join(missing), flush=True)
     os.makedirs(a.out, exist_ok=True)
-    r = generate.build(a.data, os.path.join(a.out, "file-" + a.start), now, freeze_eop=True, keep_on_fail=True)
+    try:
+        r = generate.build(a.data, os.path.join(a.out, "file-" + a.start), now, freeze_eop=True, keep_on_fail=True)
+    except RuntimeError as e:   # e.g. a gap in the IGS archive: record it and carry on with the other start dates
+        print("SKIPPED:", e)
+        with open(os.path.join(a.out, "notes-%s-%s.txt" % (a.label, a.start)), "w") as f:
+            f.write("skipped: %s\n" % e)
+        return
     eop = orbit.EOP(a.data); eop.frozen_after = float(orbit.mjd_utc(r["now_gps"]))
     truth = load_truth_with_clock(a.data)
     rows = evaluate(r["target"], truth, r["now_gps"], eop, a.label, a.start)
