@@ -31,6 +31,15 @@ jobs:
         run: |
           gh release view current >/dev/null 2>&1 || gh release create current --title "Current A-GPS file" --notes "NML_28A.ee for Nikon D5300 and COOLPIX P330/P510/P520. Replaced automatically every day."
           gh release upload current out/NML_28A.ee --clobber
+          # weekly archive: keep the first file of each ISO week
+          WEEK=$(date -u +%G-W%V)
+          gh release view archive >/dev/null 2>&1 || gh release create archive --title "Archive of A-GPS files" --notes "One NML_28A.ee per ISO week, named NML_28A_<week>_<date>.ee. Rename to NML_28A.ee before copying it to the camera. Each file is valid for 28 days from its date."
+          if gh release view archive --json assets --jq '.assets[].name' | grep -q "_${WEEK}_"; then
+            echo "archive already holds a file for ${WEEK}"
+          else
+            cp out/NML_28A.ee "out/NML_28A_${WEEK}_$(date -u +%F).ee"
+            gh release upload archive "out/NML_28A_${WEEK}_$(date -u +%F).ee"
+          fi
           cp out/status.md status.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
