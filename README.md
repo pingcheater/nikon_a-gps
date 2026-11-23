@@ -42,6 +42,11 @@ Run locally: `pip install -r requirements.txt`, then `python -m agps.generate --
 - Gravity field: JGM-3 (`data/JGM3.gfc`), taken from the project duncaneddy/brahe
   (MIT licence, see `data/LICENSE-brahe.txt`)
 
+## Archive
+One file per ISO week is archived under [Releases → archive](https://github.com/pingcheater/nikon_a-gps/releases/tag/archive).
+Each file is valid for 28 days from its date; rename it to `NML_28A.ee` before use.
+Main idea behind the archive is to store old files in case they might be useful at some point (e.g. to improve forecast quality)
+
 ## Disclaimer
 
 Unofficial project with no affiliation to Nikon Corporation. Nikon, D5300 and COOLPIX are trademarks of their
