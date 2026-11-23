@@ -75,3 +75,27 @@ def download_all(folder, now=None, days=8):
         raise RuntimeError("no ultra-rapid orbits found")
     if not got:
         raise RuntimeError("no broadcast data found")
+
+
+def download_range(folder, first, last, brdc_days):
+    """Rapid orbits and ERP for every day from `first` to `last` (dates), broadcast files for the dates in `brdc_days`."""
+    os.makedirs(folder, exist_ok=True)
+    d = first; missing = []
+    while d <= last:
+        week = (datetime.datetime(d.year, d.month, d.day) - GPS_EPOCH).days // 7
+        url = "%s/products/%d/" % (BASE, week)
+        stamp = "%d%03d0000" % (d.year, d.timetuple().tm_yday)
+        for kind in ("01D_15M_ORB.SP3.gz", "01D_01D_ERP.ERP.gz"):
+            try:
+                fetch(url, "IGS0OPSRAP_%s_%s" % (stamp, kind), folder)
+            except RuntimeError:
+                missing.append("%s %s" % (d, kind))
+        d += datetime.timedelta(days=1)
+    for d in brdc_days:
+        url = "%s/BRDC/%d/%03d/" % (BASE, d.year, d.timetuple().tm_yday)
+        names = listing(url)
+        pick = [n for n in names if re.match(r"^BRDC00IGS_R_.*_MN\.rnx\.gz$", n)] or \
+               [n for n in names if re.match(r"^BRDC00WRD_R_.*_MN\.rnx\.gz$", n)]
+        if pick: fetch(url, pick[0], folder)
+        else: missing.append("%s broadcast" % d)
+    return missing

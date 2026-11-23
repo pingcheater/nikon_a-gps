@@ -145,18 +145,12 @@ def read_leap(path):
     return None
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="out"); ap.add_argument("--data", default="igs-data")
-    ap.add_argument("--no-download", action="store_true"); ap.add_argument("--now", default=None)
-    a = ap.parse_args()
-    now = datetime.datetime.fromisoformat(a.now) if a.now else datetime.datetime.utcnow()
-    os.makedirs(a.out, exist_ok=True)
-    if not a.no_download:
-        print("Downloading IGS data ...", flush=True); download.download_all(a.data, now)
-
+def build(data, out, now, freeze_eop=False, keep_on_fail=False):
+    """Generates out/NML_28A.ee and out/status.md from the IGS files in `data`, using only data up to `now`.
+    freeze_eop: extrapolate Earth rotation parameters after `now` (for hindcasts). Returns a result dict."""
+    os.makedirs(out, exist_ok=True)
     # broadcast data: clocks, health, leap seconds
-    bfiles = sorted(glob.glob(os.path.join(a.data, "BRDC*MN.rnx")), key=lambda p: os.path.basename(p).split("_")[2])
+    bfiles = sorted(glob.glob(os.path.join(data, "BRDC*MN.rnx")), key=lambda p: os.path.basename(p).split("_")[2])
     leap = next((l for l in (read_leap(f) for f in reversed(bfiles)) if l), None)
     if leap: orbit.LEAP = leap
     now_gps = (now - datetime.datetime(1980, 1, 6)).total_seconds() + orbit.LEAP
@@ -164,9 +158,10 @@ def main():
     latest = {}
     for r in allb:
         if r["prn"] not in latest or r["toc"] > latest[r["prn"]]["toc"]: latest[r["prn"]] = r
-    if len(latest) < 24: sys.exit("ERROR: only %d satellites in the broadcast data" % len(latest))
+    if len(latest) < 24: raise RuntimeError("only %d satellites in the broadcast data" % len(latest))
 
-    eop = orbit.EOP(a.data); truth = orbit.load_truth(a.data); force = orbit.Force(eop, GRAV)
+    eop = orbit.EOP(data); truth = orbit.load_truth(data); force = orbit.Force(eop, GRAV)
+    if freeze_eop: eop.frozen_after = float(orbit.mjd_utc(now_gps))
     truth = {p: (t[t <= now_gps], x[t <= now_gps]) for p, (t, x) in truth.items()}
     t_last = max(v[0][-1] for v in truth.values())
     print("orbit data until %s, %d satellites" % (N.gps_datetime(t_last).strftime("%Y-%m-%d %H:%M"), len(truth)), flush=True)
@@ -208,7 +203,7 @@ def main():
     print("ephemeris fit: %.0f s" % (time.time() - tic), flush=True)
 
     blocks = build_blocks(T0, eph, latest, notes)
-    target = os.path.join(a.out, "NML_28A.ee")
+    target = os.path.join(out, "NML_28A.ee")
     N.write_file(target, blocks)
 
     # ---------------- checks: decode the file and compare
@@ -224,7 +219,7 @@ def main():
         if x["prn"] in E and x["health"] == 0 and x["toe"] >= T0 and x["toe"] < T0 + 28 * DAY:
             t = x["toe"]; bro.append(np.linalg.norm(np.array(N.ecef(E[x["prn"]][int((t - T0) // 21600)], t)) - np.array(N.ecef(x, t))))
     ult = []
-    ufiles = sorted(glob.glob(os.path.join(a.data, "*OPSULT*ORB.SP3")))
+    ufiles = sorted(glob.glob(os.path.join(data, "*OPSULT*ORB.SP3")))
     if ufiles:
         for prn, arr in orbit.read_sp3(ufiles[-1]).items():
             if prn in E:
@@ -246,10 +241,24 @@ def main():
              "- Satellites (%d): %s" % (nsat, " ".join(str(p) for p in sorted(E))), "", "## Checks", ""]
     lines += ["- %s %s" % ("OK   " if c[1] else "FAIL", c[0]) for c in checks]
     if notes: lines += ["", "## Notes", ""] + ["- " + n for n in notes]
-    open(os.path.join(a.out, "status.md"), "w").write("\n".join(lines) + "\n")
+    open(os.path.join(out, "status.md"), "w").write("\n".join(lines) + "\n")
     print("\n".join(lines))
-    if not ok:
-        os.remove(target); sys.exit("ERROR: checks failed, file discarded")
+    if not ok and not keep_on_fail:
+        os.remove(target)
+    return dict(ok=ok, target=target, T0=T0, now_gps=now_gps, notes=notes, checks=checks)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="out"); ap.add_argument("--data", default="igs-data")
+    ap.add_argument("--no-download", action="store_true"); ap.add_argument("--now", default=None)
+    a = ap.parse_args()
+    now = datetime.datetime.fromisoformat(a.now) if a.now else datetime.datetime.utcnow()
+    if not a.no_download:
+        print("Downloading IGS data ...", flush=True); download.download_all(a.data, now)
+    r = build(a.data, a.out, now)
+    if not r["ok"]:
+        sys.exit("ERROR: checks failed, file discarded")
 
 
 if __name__ == "__main__":
