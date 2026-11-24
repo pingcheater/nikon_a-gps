@@ -92,12 +92,12 @@ def run(a):
     now = datetime.datetime(start.year, start.month, start.day, 0, 0)
     if not a.no_download:
         print("Downloading IGS data for %s ..." % start, flush=True)
-        missing = download.download_range(a.data, start - datetime.timedelta(days=6), start + datetime.timedelta(days=28),
+        missing = download.download_range(a.data, start - datetime.timedelta(days=10), start + datetime.timedelta(days=28),
                                           [start - datetime.timedelta(days=1), start])
         if missing: print("missing:", ", ".join(missing), flush=True)
     os.makedirs(a.out, exist_ok=True)
     try:
-        r = generate.build(a.data, os.path.join(a.out, "file-" + a.start), now, freeze_eop=True, keep_on_fail=True)
+        r = generate.build(a.data, os.path.join(a.out, "file-" + a.start), now, freeze_eop=True, keep_on_fail=True, opts=a.opts)
     except RuntimeError as e:   # e.g. a gap in the IGS archive: record it and carry on with the other start dates
         print("SKIPPED:", e)
         with open(os.path.join(a.out, "notes-%s-%s.txt" % (a.label, a.start)), "w") as f:
@@ -151,6 +151,15 @@ def summary(a):
             d, _q([r["pos_med"] for r in R], 50), _q([r["pos_p95"] for r in R], 95), max(r["pos_max"] for r in R),
             _q([r["clk_rel_med"] for r in R], 50), _q([r["clk_rel_med"] for r in R], 95), _q([r["clk_med"] for r in R], 50),
             ("%.1f m (%d)" % (_q(ec, 50), len(ec))) if ec else "-", _q(no, 50)))
+    man = set((r["start"], r["prn"]) for r in rows if r["pos_max"] > 5000)
+    clean = [r for r in rows if (r["start"], r["prn"]) not in man]
+    L += ["", "## Without manoeuvres", "",
+          "Satellites whose orbit was changed by a manoeuvre after the start date (error above 5 km) are left out here: %d of %d satellite-starts." % (len(man), len(set((r["start"], r["prn"]) for r in rows))), "",
+          "| Day | Position median | Position p90 | Clock rel. median | Clock rel. p90 |", "|---:|---:|---:|---:|---:|"]
+    for d in sorted(set(r["day"] for r in clean)):
+        R = [r for r in clean if r["day"] == d]
+        L.append("| %d | %.1f m | %.1f m | %.1f m | %.1f m |" % (d, _q([r["pos_med"] for r in R], 50), _q([r["pos_med"] for r in R], 90),
+                 _q([r["clk_rel_med"] for r in R], 50), _q([r["clk_rel_med"] for r in R], 90)))
     L += ["", "## Worst satellite-days (position)", "", "| Start | PRN | Day | Position median | Position max | Eclipse min |", "|---|---:|---:|---:|---:|---:|"]
     for r in sorted(rows, key=lambda r: -r["pos_max"])[:15]:
         L.append("| %s | %d | %d | %.0f m | %.0f m | %d |" % (r["start"], r["prn"], r["day"], r["pos_med"], r["pos_max"], r["eclipse_min"]))
@@ -171,6 +180,7 @@ def main():
     sp = ap.add_subparsers(dest="cmd", required=True)
     r = sp.add_parser("run"); r.add_argument("--start", required=True); r.add_argument("--out", default="hc")
     r.add_argument("--data", default="hc-data"); r.add_argument("--label", default="baseline"); r.add_argument("--no-download", action="store_true")
+    r.add_argument("--opts", default="", help="model options passed to the generator, e.g. clock=quad5,srp=ecom2,arc=7")
     s = sp.add_parser("summary"); s.add_argument("--inp", required=True); s.add_argument("--out", required=True); s.add_argument("--label", default="")
     a = ap.parse_args()
     run(a) if a.cmd == "run" else summary(a)

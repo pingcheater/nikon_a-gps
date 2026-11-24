@@ -103,14 +103,19 @@ ORDER = ["sqrtA", "e", "i0", "raan", "M0", "omega", "idot", "omegadot", "deltan"
 COL = dict(sqrtA=0, e=1, i0=2, omega=4, M0=5, deltan=6, omegadot=7, idot=8, cuc=9, cus=10, crc=11, crs=12, cic=13, cis=14)
 
 
-def build_blocks(T0, eph, latest, log):
+def build_blocks(T0, eph, latest, log, clock_fn=None):
     blocks = []
     for b in range(4):
         Tb = int(T0 + 604800 * b); slots = []
         for prn in range(1, 33):
             empty = [dict(h=[0, 0, 0, 0], z=0, s=[0] * 28) for _ in N.PARAMS]
             br = latest.get(prn); af0 = af1 = 0
-            if br:
+            if br and clock_fn and prn in clock_fn:
+                # predicted clock: best straight line over this block's week
+                tt = Tb + 3600.0 * np.arange(169); cc = clock_fn[prn](tt)
+                c1, c0 = np.polyfit(tt - Tb, cc, 1)
+                af1 = int(round(c1 / N.AF1_LSB)); af0 = int(round(c0 / N.AF0_LSB))
+            elif br:
                 af1 = int(round(br["af1"] / N.AF1_LSB)); af0 = int(round((br["af0"] + br["af1"] * (Tb - br["toc"])) / N.AF0_LSB))
                 if not (-2 ** 31 <= af0 < 2 ** 31 and -2 ** 23 <= af1 < 2 ** 23): br = None; af0 = af1 = 0
             if prn == 1:
@@ -145,9 +150,41 @@ def read_leap(path):
     return None
 
 
-def build(data, out, now, freeze_eop=False, keep_on_fail=False):
+DEFAULTS = dict(clock="broadcast", srp="ecom1", arc="5")
+
+
+def parse_opts(text):
+    """'clock=quad5,srp=ecom2,arc=7' -> dict, missing keys from DEFAULTS.
+    clock: broadcast | linN | quadN (fit to the last N days of IGS clocks); srp: ecom1 | ecom2; arc: longest fit arc in days."""
+    o = dict(DEFAULTS)
+    for part in filter(None, (text or "").split(",")):
+        k, v = part.split("=", 1); o[k.strip()] = v.strip()
+    return o
+
+
+def make_clock_fn(data, now_gps, latest, spec, notes):
+    """Clock predictions from a polynomial fit to IGS clocks, shifted to the broadcast time scale."""
+    import re
+    m = re.match(r"^(lin|quad)(\d+(?:\.\d+)?)$", spec)
+    if not m: raise ValueError("unknown clock model " + spec)
+    deg = 1 if m.group(1) == "lin" else 2; days = float(m.group(2))
+    clocks = orbit.load_clocks(data, now_gps)
+    cfs = {p: orbit.clock_model(t, c, now_gps, days, deg) for p, (t, c) in clocks.items()}
+    cfs = {p: cf for p, cf in cfs.items() if cf is not None and p in latest}
+    if len(cfs) < 20:
+        notes.append("clock model %s: only %d satellites, using broadcast clocks" % (spec, len(cfs))); return None
+    # IGS clocks and broadcast clocks differ by an offset common to all satellites: take the median at `now`
+    off = np.median([latest[p]["af0"] + latest[p]["af1"] * (now_gps - latest[p]["toc"]) - np.polyval(cf, 0.0) for p, cf in cfs.items()])
+    return {p: (lambda tt, cf=cf: np.polyval(cf, (np.asarray(tt) - now_gps) / 86400.0) + off) for p, cf in cfs.items()}
+
+
+def build(data, out, now, freeze_eop=False, keep_on_fail=False, opts=None):
     """Generates out/NML_28A.ee and out/status.md from the IGS files in `data`, using only data up to `now`.
-    freeze_eop: extrapolate Earth rotation parameters after `now` (for hindcasts). Returns a result dict."""
+    freeze_eop: extrapolate Earth rotation parameters after `now` (for hindcasts). opts: see parse_opts.
+    Returns a result dict."""
+    opts = parse_opts(opts) if not isinstance(opts, dict) else opts
+    npar = {"ecom1": 5, "ecom2": 9}[opts["srp"]]
+    arc = float(opts["arc"])
     os.makedirs(out, exist_ok=True)
     # broadcast data: clocks, health, leap seconds
     bfiles = sorted(glob.glob(os.path.join(data, "BRDC*MN.rnx")), key=lambda p: os.path.basename(p).split("_")[2])
@@ -168,7 +205,7 @@ def build(data, out, now, freeze_eop=False, keep_on_fail=False):
 
     # orbit fit with staggered arc lengths (manoeuvres shorten the arc)
     res = {}; todo = sorted(truth); notes = []
-    for days, lim in ((5.0, 3.0), (2.5, 10.0), (1.0, 30.0)):
+    for days, lim in ((arc, 3.0), (arc / 2, 10.0), (1.0, 30.0)):
         t_s = t_last - days * DAY
         ok = []
         for p in todo:
@@ -176,7 +213,7 @@ def build(data, out, now, freeze_eop=False, keep_on_fail=False):
             if k.sum() >= 0.75 * days * 96 and ts[k][0] - t_s < 1900 and t_last - ts[-1] < 1900: ok.append(p)
         if not ok: continue
         tic = time.time()
-        t0, y0, p_, rms = orbit.fit_orbits(force, truth, eop, ok, t_s, t_last, verbose=False, iters=5)
+        t0, y0, p_, rms = orbit.fit_orbits(force, truth, eop, ok, t_s, t_last, verbose=False, iters=5, npar=npar)
         print("fit over %.1f days: %d satellites, %.0f s" % (days, len(ok), time.time() - tic), flush=True)
         for n, p in enumerate(ok):
             if rms[n] <= lim: res[p] = dict(t0=t0, y0=y0[n], p=p_[n], rms=float(rms[n]), arc=days)
@@ -204,7 +241,8 @@ def build(data, out, now, freeze_eop=False, keep_on_fail=False):
         else: notes.append("PRN %d: ephemeris fit %.0f m, skipped" % (p, r.max()))
     print("ephemeris fit: %.0f s" % (time.time() - tic), flush=True)
 
-    blocks = build_blocks(T0, eph, latest, notes)
+    clock_fn = None if opts["clock"] == "broadcast" else make_clock_fn(data, now_gps, latest, opts["clock"], notes)
+    blocks = build_blocks(T0, eph, latest, notes, clock_fn)
     target = os.path.join(out, "NML_28A.ee")
     N.write_file(target, blocks)
 
@@ -237,6 +275,7 @@ def build(data, out, now, freeze_eop=False, keep_on_fail=False):
     ok = all(c[1] for c in checks)
     end = N.gps_datetime(T0 + 28 * DAY)
     lines = ["# A-GPS file status", "",
+             "- Model: " + ", ".join("%s=%s" % kv for kv in sorted(opts.items())),
              "- Generated: %s UTC" % now.strftime("%Y-%m-%d %H:%M"),
              "- Valid: %s to %s (GPS time)" % (N.gps_datetime(T0).strftime("%Y-%m-%d %H:%M"), end.strftime("%Y-%m-%d %H:%M")),
              "- Orbit data until: %s" % N.gps_datetime(t_last).strftime("%Y-%m-%d %H:%M"),
@@ -254,11 +293,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="out"); ap.add_argument("--data", default="igs-data")
     ap.add_argument("--no-download", action="store_true"); ap.add_argument("--now", default=None)
+    ap.add_argument("--opts", default="", help="model options, e.g. clock=quad5,srp=ecom2,arc=7")
     a = ap.parse_args()
     now = datetime.datetime.fromisoformat(a.now) if a.now else datetime.datetime.utcnow()
     if not a.no_download:
         print("Downloading IGS data ...", flush=True); download.download_all(a.data, now)
-    r = build(a.data, a.out, now)
+    r = build(a.data, a.out, now, opts=a.opts)
     if not r["ok"]:
         sys.exit("ERROR: checks failed, file discarded")
 

@@ -151,6 +151,7 @@ class Force:
         node = np.stack([-h[:, 1], h[:, 0], np.zeros(len(h))], axis=1)
         node /= np.linalg.norm(node, axis=1, keepdims=True)
         u = np.arctan2(np.sum(r * np.cross(h, node), axis=1), np.sum(r * node, axis=1))
+        sh = sun / np.linalg.norm(sun)
         # shadow: distance from the shadow axis, smooth transition across the penumbra
         sh = sun / np.linalg.norm(sun)
         s_along = r @ sh
@@ -158,7 +159,14 @@ class Force:
         pen = np.abs(s_along) * R_SUN / np.linalg.norm(sun)
         nu = np.where(s_along < 0, np.clip((perp - (RE - pen)) / (2 * pen), 0, 1), 1.0)
         scale = (AU / dn) ** 2 * nu[:, None]
-        a += scale * (p[:, 0:1] * eD + p[:, 1:2] * eY + (p[:, 2:3] + p[:, 3:4] * np.cos(u)[:, None] + p[:, 4:5] * np.sin(u)[:, None]) * eB)
+        if p.shape[1] == 5:   # ECOM1: periodic terms in B, argument of latitude
+            a += scale * (p[:, 0:1] * eD + p[:, 1:2] * eY + (p[:, 2:3] + p[:, 3:4] * np.cos(u)[:, None] + p[:, 4:5] * np.sin(u)[:, None]) * eB)
+        else:                 # ECOM2: periodic terms relative to the Sun's argument of latitude
+            us = np.arctan2(np.cross(h, node) @ sh, node @ sh)
+            du = (u - us)[:, None]
+            D = p[:, 0:1] + p[:, 5:6] * np.cos(2 * du) + p[:, 6:7] * np.sin(2 * du) + p[:, 7:8] * np.cos(4 * du) + p[:, 8:9] * np.sin(4 * du)
+            B = p[:, 2:3] + p[:, 3:4] * np.cos(du) + p[:, 4:5] * np.sin(du)
+            a += scale * (D * eD + p[:, 1:2] * eY + B * eB)
         return a
 
     def propagate(self, t0, y0, p, t_eval, rtol=1e-10):
@@ -249,8 +257,9 @@ def initial_state(ts, xi, t0):
     return np.concatenate([coef[0], coef[1] / 3600.0])
 
 
-def fit_orbits(force, truth, eop, prns, t_start, t_end, iters=4, verbose=True, step=900):
-    """Fits initial state + 5 radiation pressure parameters per satellite. Returns t0, y0 (N,6), p (N,5), rms (N)."""
+def fit_orbits(force, truth, eop, prns, t_start, t_end, iters=4, verbose=True, step=900, npar=5):
+    """Fits initial state + npar radiation pressure parameters (5 = ECOM1, 9 = ECOM2) per satellite.
+    Returns t0, y0 (N,6), p (N,npar), rms (N)."""
     t0 = t_start
     grid = np.arange(t_start, t_end + 1, step)
     obs = []; y0 = []
@@ -265,17 +274,18 @@ def fit_orbits(force, truth, eop, prns, t_start, t_end, iters=4, verbose=True, s
         y0.append(initial_state(tk, xi, t0))
     obs = np.array(obs)            # (N, T, 3)
     y0 = np.array(y0); N = len(prns)
-    p = np.tile([-1.0e-7, 0, 0, 0, 0], (N, 1))
-    dpar = np.array([10.0] * 3 + [1e-3] * 3 + [2e-9] * 5)
+    p = np.zeros((N, npar)); p[:, 0] = -1.0e-7
+    nq = 6 + npar; nc = nq + 1
+    dpar = np.array([10.0] * 3 + [1e-3] * 3 + [2e-9] * npar)
     rms = None
     for it in range(iters):
-        Y = np.repeat(y0, 12, axis=0); P = np.repeat(p, 12, axis=0)
-        for j in range(11):
-            idx = np.arange(N) * 12 + 1 + j
+        Y = np.repeat(y0, nc, axis=0); P = np.repeat(p, nc, axis=0)
+        for j in range(nq):
+            idx = np.arange(N) * nc + 1 + j
             if j < 6: Y[idx, j] += dpar[j]
             else: P[idx, j - 6] += dpar[j]
-        traj = force.propagate(t0, Y, P, grid)[:, :, :3]   # (T, 12N, 3)
-        traj = traj.transpose(1, 0, 2).reshape(N, 12, len(grid), 3)
+        traj = force.propagate(t0, Y, P, grid)[:, :, :3]   # (T, nc*N, 3)
+        traj = traj.transpose(1, 0, 2).reshape(N, nc, len(grid), 3)
         res = obs - traj[:, 0]                             # (N,T,3)
         rms = np.sqrt(np.nanmean((res ** 2).sum(axis=2), axis=1))
         res = np.nan_to_num(res)
@@ -284,7 +294,40 @@ def fit_orbits(force, truth, eop, prns, t_start, t_end, iters=4, verbose=True, s
         if it == iters - 1:
             break
         for n in range(N):
-            J = np.stack([(traj[n, 1 + j] - traj[n, 0]).ravel() / dpar[j] for j in range(11)], axis=1)
+            J = np.stack([(traj[n, 1 + j] - traj[n, 0]).ravel() / dpar[j] for j in range(nq)], axis=1)
             dx = np.linalg.lstsq(J, res[n].ravel(), rcond=None)[0]
             y0[n] += dx[:6]; p[n] += dx[6:]
     return t0, y0, p, rms
+
+
+def load_clocks(folder, t_max):
+    """prn -> (t, clock [s]) from rapid and observed ultra-rapid SP3 files, up to t_max."""
+    rows = {}
+    files = sorted(glob.glob(os.path.join(folder, "*OPSRAP*ORB.SP3"))) + sorted(glob.glob(os.path.join(folder, "*OPSULT*ORB.SP3")))
+    for f in files:
+        for prn, a in read_sp3(f).items():
+            if "OPSULT" in f:
+                a = a[(a[:, 0] < a[0, 0] + 86400) & (a[:, 5] == 0)]
+            d = rows.setdefault(prn, {})
+            for r in a:
+                if r[0] <= t_max and np.isfinite(r[4]):
+                    d.setdefault(r[0], r[4])
+    out = {}
+    for prn, d in rows.items():
+        t = np.array(sorted(d))
+        out[prn] = (t, np.array([d[k] for k in t]))
+    return out
+
+
+def clock_model(t, c, t_ref, days, degree):
+    """Polynomial fit to the last `days` of clock values (robust against outliers). Returns coefficients in days since t_ref."""
+    k = t > t_ref - days * 86400
+    x = (t[k] - t_ref) / 86400.0; y = c[k]
+    if len(x) < 4 * 24 * min(days, 1) * 0.5:
+        return None
+    cf = np.polyfit(x, y, degree)
+    for _ in range(2):
+        r = y - np.polyval(cf, x)
+        g = np.abs(r) < 5 * np.median(np.abs(r)) + 1e-11
+        cf = np.polyfit(x[g], y[g], degree)
+    return cf
