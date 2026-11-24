@@ -15,7 +15,7 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -24,7 +24,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Generate and check the file
-        run: python -m agps.generate --out out --opts clock=quad5
+        run: python -m agps.generate --out out --opts clock=quad5,srp=ecom2
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
