@@ -15,9 +15,12 @@ on:
       label:
         description: "Name of this test run (folder under hindcast/)"
         default: "baseline"
+      opts:
+        description: "Model options, e.g. clock=quad5,srp=ecom2,arc=7 (empty = current model)"
+        default: ""
 
 concurrency:
-  group: hindcast
+  group: hindcast-${{ inputs.label }}
   cancel-in-progress: false
 
 jobs:
@@ -53,10 +56,10 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Hindcast ${{ matrix.start }}
-        run: python -m agps.hindcast run --start ${{ matrix.start }} --out hc --label ${{ inputs.label }}
+        run: python -m agps.hindcast run --start ${{ matrix.start }} --out hc --label ${{ inputs.label }} --opts "${{ inputs.opts }}"
       - uses: actions/upload-artifact@v7
         with:
-          name: hc-${{ matrix.start }}
+          name: hc-${{ inputs.label }}-${{ matrix.start }}
           path: |
             hc/*.csv
             hc/*.txt
@@ -76,7 +79,7 @@ jobs:
       - run: pip install -r requirements.txt
       - uses: actions/download-artifact@v8
         with:
-          pattern: hc-*
+          pattern: hc-${{ inputs.label }}-*
           path: results
       - name: Summarise
         run: python -m agps.hindcast summary --inp results --out hindcast/${{ inputs.label }} --label ${{ inputs.label }}
