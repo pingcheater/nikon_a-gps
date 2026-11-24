@@ -13,14 +13,14 @@ on:
         description: "Days between start dates"
         default: "7"
       label:
-        description: "Name of this test run (folder under hindcast/)"
-        default: "baseline"
+        description: "Name of this test run (folder under hindcast/); empty = derived from the options"
+        default: ""
       opts:
         description: "Model options, e.g. clock=quad5,srp=ecom2,arc=7 (empty = current model)"
         default: ""
 
 concurrency:
-  group: hindcast-${{ inputs.label }}
+  group: hindcast-${{ inputs.label }}-${{ inputs.opts }}
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       starts: ${{ steps.p.outputs.starts }}
+      label: ${{ steps.p.outputs.label }}
     steps:
       - id: p
         run: |
@@ -38,6 +39,11 @@ jobs:
           latest = datetime.date.today() - datetime.timedelta(days=30)
           starts = [str(d + datetime.timedelta(days=s * i)) for i in range(n) if d + datetime.timedelta(days=s * i) <= latest]
           print("starts=" + json.dumps(starts))
+          label = "${{ inputs.label }}".strip()
+          opts = "${{ inputs.opts }}".strip()
+          if not label:
+              label = opts.replace("=", "-").replace(",", "_") if opts else "baseline"
+          print("label=" + label)
           PY
 
   run:
@@ -56,16 +62,16 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Hindcast ${{ matrix.start }}
-        run: python -m agps.hindcast run --start ${{ matrix.start }} --out hc --label ${{ inputs.label }} --opts "${{ inputs.opts }}"
+        run: python -m agps.hindcast run --start ${{ matrix.start }} --out hc --label ${{ needs.plan.outputs.label }} --opts "${{ inputs.opts }}"
       - uses: actions/upload-artifact@v7
         with:
-          name: hc-${{ inputs.label }}-${{ matrix.start }}
+          name: hc-${{ needs.plan.outputs.label }}-${{ matrix.start }}
           path: |
             hc/*.csv
             hc/*.txt
 
   summary:
-    needs: run
+    needs: [plan, run]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -79,15 +85,15 @@ jobs:
       - run: pip install -r requirements.txt
       - uses: actions/download-artifact@v8
         with:
-          pattern: hc-${{ inputs.label }}-*
+          pattern: hc-${{ needs.plan.outputs.label }}-*
           path: results
       - name: Summarise
-        run: python -m agps.hindcast summary --inp results --out hindcast/${{ inputs.label }} --label ${{ inputs.label }}
+        run: python -m agps.hindcast summary --inp results --out hindcast/${{ needs.plan.outputs.label }} --label ${{ needs.plan.outputs.label }}
       - name: Commit results
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add hindcast
-          git commit -m "Hindcast ${{ inputs.label }}" || echo "unchanged"
+          git commit -m "Hindcast ${{ needs.plan.outputs.label }}" || echo "unchanged"
           git pull --rebase
           git push
