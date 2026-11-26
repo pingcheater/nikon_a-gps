@@ -41,7 +41,7 @@ def fetch(url, name, folder):
 def download_all(folder, now=None, days=8):
     """Rapid orbits of the last `days` days, the three newest ultra-rapid orbits, broadcast data of today and yesterday."""
     os.makedirs(folder, exist_ok=True)
-    now = now or datetime.datetime.utcnow()
+    now = now or datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     week = (now - GPS_EPOCH).days // 7
     oldest = (now - datetime.timedelta(days=days)).strftime("%Y%j")
     ult = []

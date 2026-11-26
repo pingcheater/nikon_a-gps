@@ -295,7 +295,7 @@ def main():
     ap.add_argument("--no-download", action="store_true"); ap.add_argument("--now", default=None)
     ap.add_argument("--opts", default="", help="model options, e.g. clock=quad5,srp=ecom2,arc=7")
     a = ap.parse_args()
-    now = datetime.datetime.fromisoformat(a.now) if a.now else datetime.datetime.utcnow()
+    now = datetime.datetime.fromisoformat(a.now) if a.now else datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     if not a.no_download:
         print("Downloading IGS data ...", flush=True); download.download_all(a.data, now)
     r = build(a.data, a.out, now, opts=a.opts)
