@@ -30,6 +30,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view current >/dev/null 2>&1 || gh release create current --title "Current A-GPS file" --notes "NML_28A.ee for Nikon D5300 and COOLPIX P330/P510/P520. Replaced automatically every day."
+          python -m agps.downloads collect
           gh release upload current out/NML_28A.ee --clobber
           # weekly archive: keep the first file of each ISO week
           WEEK=$(date -u +%G-W%V)
@@ -41,9 +42,10 @@ jobs:
             gh release upload archive "out/NML_28A_${WEEK}_$(date -u +%F).ee"
           fi
           cp out/status.md status.md
+          python -m agps.downloads report >> status.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add status.md
+          git add status.md downloads.json
           git commit -m "Status $(date -u +%F)" || echo "unchanged"
           git pull --rebase
           git push
