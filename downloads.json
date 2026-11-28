@@ -1,6 +1,6 @@
 {
  "since": "2026-11-26",
- "previous_versions": 1,
+ "previous_versions": 9,
  "daily": [
   {
    "replaced": "2026-11-26 20:45",
@@ -9,6 +9,10 @@
   {
    "replaced": "2026-11-27 06:00",
    "downloads": 0
+  },
+  {
+   "replaced": "2026-11-28 05:43",
+   "downloads": 8
   }
  ]
 }
